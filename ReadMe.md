@@ -1,7 +1,8 @@
 # ⚡ ZapQ In‑Memory FIFO Queue Server
 
 A single‑binary Go microservice that exposes a **First‑In / First‑Out message queue** completely in RAM. This README explains **what every endpoint does, why it works internally, and the key computer‑science principles** behind each subsystem.
-
+This queue deliberately pairs a plain slice + mutex (for data integrity) with lock-free atomic counters (for hot-path metrics) to balance simplicity and high-throughput telemetry.
+Wrapping that lean core in HTTP/TLS, structured logging, and health endpoints so it can drop straight into micro-service stacks without extra glue.
 > **TL;DR**
 > * Ultra‑low‑latency queue for transient messages (≤ 128 KB each).
 > * Hard caps (`maxBytes`, `maxMsgs`) guard RAM.
