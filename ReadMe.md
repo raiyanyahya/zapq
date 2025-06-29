@@ -3,6 +3,9 @@
 A single‑binary Go microservice that exposes a **First‑In / First‑Out message queue** completely in RAM. This README explains **what every endpoint does, why it works internally, and the key computer‑science principles** behind each subsystem.
 This queue deliberately pairs a plain slice + mutex (for data integrity) with lock-free atomic counters (for hot-path metrics) to balance simplicity and high-throughput telemetry.
 Wrapping that lean core in HTTP/TLS, structured logging, and health endpoints so it can drop straight into micro-service stacks without extra glue.
+
+ZapQ is aiming at a different sweetspot: a single-process, RAM only FIFO that you can spin up with virtually zero config, drop next to a container, and hit at ~µs latencies.  No clustering logic, no external store, just a fast, transparent buffer.  If you outgrow that or need fan-out, persistence, or stream replay, NATS (or Kafka, or Redis Streams) is absolutely the right move.
+
 > **TL;DR**
 > * Ultra‑low‑latency queue for transient messages (≤ 128 KB each).
 > * Hard caps (`maxBytes`, `maxMsgs`) guard RAM.
@@ -104,20 +107,7 @@ This follows Go’s **graceful‑shutdown contract**, ensuring linearizability e
 
 ---
 
-## 5. Computer‑Science Nuggets
-
-* **Critical Section** – guarded by a single mutex. Simpler than read‑write locks because writes dominate.
-* **Copy‑on‑enqueue** – `cp := append([]byte(nil), b...)` avoids aliasing if caller reuses slice; preserves queue immutability.
-* **Slice‑shifting** – Cheap header move; memory of popped item reclaimed after next GC cycle.
-* **Atomic counters** – Use `sync/atomic` so metrics don’t need mutex (lock‑free, wait‑free).
-* **Memory Cap Enforcement** – Prevents unbounded growth, a common cause of **OOM‑killer** crashes.
-* **File‑descriptor telemetry** – Reading `/proc/self/fd` counts live FDs, helping detect `EMFILE` risk.
-* **Back‑pressure via 429** – Follows HTTP semantics; clients must retry or throttle. This protects server latency (queue spill‑over ≈ head‑of‑line blocking).
-* **Payload limit 128 KB** – Small enough to avoid pathological GC pauses; tweak `maxBody` constant if needed.
-
----
-
-## 6. Load‑Testing Examples
+## 5. Load‑Testing Examples
 
 ```bash
 # 100 parallel enqueues, 50k messages total
@@ -131,7 +121,7 @@ Observe `queue_length` grow, then drain as consumers dequeue.
 
 ---
 
-## 7. Production Checklist (Why It Matters)
+## 6. Production Checklist (Why It Matters)
 
 | Item | Reason |
 |------|--------|
@@ -145,7 +135,7 @@ Observe `queue_length` grow, then drain as consumers dequeue.
 
 ---
 
-## 8. Extending the Server (Ideas)
+## 7. Extending the Server (Ideas)
 
 * Replace global mutex with **segment locks** or a **lock‑free ring buffer** for higher parallelism.
 * Add **priority queues** using a heap instead of FIFO slice.
