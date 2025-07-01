@@ -3,10 +3,10 @@ name: ZapQ CI / Release (Linux only)
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*.*.*"]          # tag → release
   pull_request:
-    branches: [main]
+    branches: [master]
 
 permissions:
   contents: write
