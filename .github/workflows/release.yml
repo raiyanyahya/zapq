@@ -1,0 +1,100 @@
+name: ZapQ CI / Release
+
+on:
+  push:
+    branches: [master]
+    tags:     ["v*.*.*"]     # v1.2.3 → release
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: write            # needed for release upload
+  packages: read
+
+env:
+  CGO_ENABLED: 0
+  GOFLAGS:     -trimpath
+
+jobs:
+# ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: Unit & race tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: true            # module & build cache
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race detector)
+        run: go test -race -cover ./...
+
+# ──────────────────────────────────────────────────────────────────────────
+  build:
+    name: Cross-compile
+    needs: test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        goos:   [linux, darwin, windows]
+        goarch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: true
+
+      - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          OUT="zapq-${{ matrix.goos }}-${{ matrix.goarch }}"
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -ldflags "-s -w" \
+            -o "dist/${OUT}${EXT}" .
+
+      - name: Compress
+        run: |
+          cd dist
+          OUT="zapq-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            7z a "${OUT}.zip" "${OUT}.exe"
+          else
+            tar czf "${OUT}.tar.gz" "${OUT}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/*
+
+# ──────────────────────────────────────────────────────────────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - name: Create Release & upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
