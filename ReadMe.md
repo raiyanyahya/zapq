@@ -1,4 +1,9 @@
 # ⚡ ZapQ In‑Memory FIFO Queue Server
+<!-- CI & quality badges -->
+[![build](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml)
+[![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/raiyanyahya/zapq)](https://goreportcard.com/report/github.com/raiyanyahya/zapq)
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/raiyanyahya/zapq)](https://pkg.go.dev/github.com/raiyanyahya/zapq)
 
 A single‑binary Go microservice that exposes a **First‑In / First‑Out message queue** completely in RAM. This README explains **what every endpoint does, why it works internally and the key computer‑science principles** behind each subsystem.
 This queue deliberately pairs a plain slice + mutex (for data integrity) with lock-free atomic counters (for hot-path metrics) to balance simplicity and high-throughput telemetry.
