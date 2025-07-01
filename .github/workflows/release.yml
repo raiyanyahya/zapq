@@ -1,100 +1,80 @@
-name: ZapQ CI / Release
+# .github/workflows/release.yml
+name: ZapQ CI / Release (Linux only)
 
 on:
   push:
-    branches: [master]
-    tags:     ["v*.*.*"]     # v1.2.3 → release
+    branches: [main]
+    tags: ["v*.*.*"]          # tag → release
   pull_request:
-    branches: [master]
+    branches: [main]
 
 permissions:
-  contents: write            # needed for release upload
+  contents: write
   packages: read
 
 env:
   CGO_ENABLED: 0
-  GOFLAGS:     -trimpath
+  GOFLAGS: -trimpath
 
 jobs:
-# ──────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
   test:
-    name: Unit & race tests
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: "stable"
-          cache: true            # module & build cache
-
+          cache: true
       - name: Vet
         run: go vet ./...
-
       - name: Test (race detector)
         run: CGO_ENABLED=1 go test -race -cover ./...
 
-# ──────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
   build:
-    name: Cross-compile
     needs: test
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
-        goos:   [linux, darwin, windows]
-        goarch: [amd64, arm64]
-
+        goarch: [amd64, arm64]   # ⬅︎ Linux only
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: "stable"
           cache: true
 
-      - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+      - name: Build linux-${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          OUT="zapq-${{ matrix.goos }}-${{ matrix.goarch }}"
-          EXT=""
-          [ "${{ matrix.goos }}" = "windows" ] && EXT=".exe"
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -ldflags "-s -w" \
-            -o "dist/${OUT}${EXT}" .
+          OUT="zapq-linux-${{ matrix.goarch }}"
+          GOOS=linux GOARCH=${{ matrix.goarch }} \
+            go build -ldflags "-s -w" -o "dist/${OUT}" .
 
       - name: Compress
         run: |
           cd dist
-          OUT="zapq-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            7z a "${OUT}.zip" "${OUT}.exe"
-          else
-            tar czf "${OUT}.tar.gz" "${OUT}"
-          fi
+          OUT="zapq-linux-${{ matrix.goarch }}"
+          tar czf "${OUT}.tar.gz" "${OUT}"
 
       - uses: actions/upload-artifact@v4
         with:
-          # 👇 unique name per matrix leg
-          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: binaries-linux-${{ matrix.goarch }}
           path: dist/*
-# ──────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
-
     steps:
-      # 👇 grab every artifact that starts with “binaries-”
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: binaries-*
+          pattern: binaries-linux-*
 
-      - name: Create Release & upload assets
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
