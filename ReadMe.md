@@ -1,7 +1,6 @@
 # ⚡ ZapQ In‑Memory FIFO Queue Server
 <!-- CI & quality badges -->
 [![build](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml)
-[![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/raiyanyahya/zapq)](https://goreportcard.com/report/github.com/raiyanyahya/zapq)
 [![PkgGoDev](https://pkg.go.dev/badge/github.com/raiyanyahya/zapq)](https://pkg.go.dev/github.com/raiyanyahya/zapq)
 
