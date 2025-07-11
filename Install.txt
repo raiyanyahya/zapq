@@ -1,0 +1,47 @@
+Install Go and Git:
+
+  sudo apt update
+  
+  sudo apt install -y golang git
+
+Clone the repository:
+
+  git clone https://github.com/raiyanyahya/zapq.git
+  
+  cd zapq
+
+Build the binary:
+
+  go build -o zapq fifo_queue_server.go
+
+Run the server:
+
+  Foreground: ./zapq 
+  
+  Background: ./zapq &
+
+  Persistent (after logout): 
+  
+    nohup ./zapq > zapq.log 2>&1 &
+
+Check if it's running:
+
+  ps aux | grep zapq
+
+Stop the server:
+
+  Find PID from ps aux | grep zapq
+  
+  Then kill <PID>
+
+Optional: Move binary to global path:
+
+  sudo mv zapq /usr/local/bin
+
+  Now you can run it anywhere using zapq
+
+Check logs (if using nohup):
+
+  tail -f zapq.log
+
+Done! Server is now running and ready to use.
