@@ -1,4 +1,4 @@
-// go run load_test.go -addr http://localhost:8080 -messages 1000000 -csv results.csv
+// go run 1M_loadtest.go -addr http://localhost:8080 -messages 1000000 -csv results.csv
 package main
 
 import (
@@ -33,11 +33,18 @@ func main() {
 	var enqOK, deqOK uint64
 	csvCh := make(chan []string, 1<<16)
 	go func() {
-		f, _ := os.Create(*out)
+		f, err := os.Create(*out)
+		if err != nil {
+			log.Fatalf("cannot create csv: %v", err)
+		}
 		w := csv.NewWriter(f)
-		_ = w.Write(hdr)
+		if err := w.Write(hdr); err != nil {
+			log.Fatalf("csv write header: %v", err)
+		}
 		for rec := range csvCh {
-			_ = w.Write(rec)
+			if err := w.Write(rec); err != nil {
+				log.Printf("csv write row: %v", err)
+			}
 		}
 		w.Flush()
 		f.Close()

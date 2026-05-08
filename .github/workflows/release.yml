@@ -1,10 +1,9 @@
-# .github/workflows/release.yml
 name: ZapQ CI / Release (Linux only)
 
 on:
   push:
     branches: [master]
-    tags: ["v*.*.*"]          # tag → release
+    tags: ["v*.*.*"]
   pull_request:
     branches: [master]
 
@@ -17,7 +16,6 @@ env:
   GOFLAGS: -trimpath
 
 jobs:
-# ────────────────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     steps:
@@ -31,13 +29,12 @@ jobs:
       - name: Test (race detector)
         run: CGO_ENABLED=1 go test -race -cover ./...
 
-# ────────────────────────────────────────────────────────────────
   build:
     needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goarch: [amd64, arm64]   # ⬅︎ Linux only
+        goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -45,12 +42,20 @@ jobs:
           go-version: "stable"
           cache: true
 
+      - name: Set version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_SHA::8}" >> "$GITHUB_ENV"
+          fi
+
       - name: Build linux-${{ matrix.goarch }}
         run: |
           mkdir -p dist
           OUT="zapq-linux-${{ matrix.goarch }}"
           GOOS=linux GOARCH=${{ matrix.goarch }} \
-            go build -ldflags "-s -w" -o "dist/${OUT}" .
+            go build -ldflags "-s -w -X main.version=${VERSION}" -o "dist/${OUT}" .
 
       - name: Compress
         run: |
@@ -63,7 +68,6 @@ jobs:
           name: binaries-linux-${{ matrix.goarch }}
           path: dist/*
 
-# ────────────────────────────────────────────────────────────────
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build

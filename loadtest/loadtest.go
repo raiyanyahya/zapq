@@ -32,7 +32,10 @@ func main() {
 	flag.Parse()
 
 	// --- HTTP client tuned for high concurrency ---
-	u, _ := url.Parse(*addr)
+	u, err := url.Parse(*addr)
+	if err != nil {
+		log.Fatalf("invalid addr %q: %v", *addr, err)
+	}
 	tr := &http.Transport{MaxIdleConnsPerHost: 10000}
 	if u.Scheme == "https" {
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}

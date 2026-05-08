@@ -1,155 +1,113 @@
 # ⚡ ZapQ In‑Memory FIFO Queue Server
-<!-- CI & quality badges -->
+
 [![build](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/raiyanyahya/zapq)](https://goreportcard.com/report/github.com/raiyanyahya/zapq)
 [![PkgGoDev](https://pkg.go.dev/badge/github.com/raiyanyahya/zapq)](https://pkg.go.dev/github.com/raiyanyahya/zapq)
 
-A single‑binary Go microservice that exposes a **First‑In / First‑Out message queue** completely in RAM. This README explains **what every endpoint does, why it works internally and the key computer‑science principles** behind each subsystem.
-This queue deliberately pairs a plain slice + mutex (for data integrity) with lock-free atomic counters (for hot-path metrics) to balance simplicity and high-throughput telemetry.
-Wrapping that lean core in HTTP/TLS, structured logging, and health endpoints so it can drop straight into micro-service stacks without extra glue.
+ZapQ is a tiny Go server that gives you a fast in memory FIFO message queue over HTTP. You push bytes in and pull them out in the same order. There is no config file, no external database and no clustering. It runs as a single binary and uses only RAM.
 
-ZapQ is aiming at a different sweetspot: a single-process, RAM only FIFO that you can spin up with virtually zero config, drop next to a container, and hit at ~µs latencies.  No clustering logic, no external store, just a fast, transparent buffer.  If you outgrow that or need fan-out, persistence, or stream replay, NATS (or Kafka, or Redis Streams) is absolutely the right move.
+The queue uses a pre allocated ring buffer protected by a read write mutex. Enqueue and dequeue are both O(1) at every scale because there are no slice shifts and no growing arrays. Atomic counters track throughput without touching the lock so your metrics never slow down the hot path.
 
-> **TL;DR**
-> * Ultra‑low‑latency queue for transient messages (≤ 128 KB each).
-> * Hard caps (`maxBytes`, `maxMsgs`) guard RAM.
-> * Concurrency‑safe via a mutex + atomic counters.
-> * JSON metrics, TLS option, graceful shutdown.
+ZapQ is built for transient messages up to 128 KB each with hard memory and count caps to protect your node. If you need persistence, fan out or streams you want NATS, Kafka or Redis Streams. ZapQ is the tool you reach for when you just need a quick buffer next to your container.
 
----
+## Benchmarks
 
-## 1. Architecture Overview
+These are measured on a Ryzen AI 7 350 with 16 threads. The queue itself runs in nanoseconds. The HTTP round trip dominates real world latency at about 50ms per call.
 
-```
- ┌────────────┐   HTTP/HTTPS    ┌────────────────────────┐   Goroutines   ┌─────────────┐
- │  Producers │ ───────────────▶│  queue ([]byte slices) │◀──────────────▶│  Consumers  │
- └────────────┘                 └────────────────────────┘                └─────────────┘
-```
+| Operation | Time | Allocations |
+|-----------|------|-------------|
+| Enqueue (128 byte payload) | 28 ns | 1 (payload copy) |
+| Dequeue | 21 ns | 0 |
+| Enqueue (parallel x16) | 95 ns | 1 |
+| Dequeue (parallel x16) | 38 ns | 0 |
+| Enqueue + dequeue round trip | 187 ns | 1 |
+| Read length and size (parallel) | 64 ns | 0 |
 
-* **queue.data** – a slice of byte‑slices (`[][]byte`). Index **0** is always the next item to pop, satisfying FIFO.
-* **queue.mu** – a single `sync.Mutex` serialises structural modifications while permitting **parallel HTTP clients**.
-* **queue.bytes** – running total for O(1) memory‑cap checks.
-* **Atomic counters** record events without taking the mutex (cache‑friendly, lock‑free).
+## Endpoints
 
-### Time & Space Complexity
-| Operation  | Time | Space Comments |
-|-----------|------|----------------|
-| `enqueue` | **O(1)** append; amortised as Go grows slice capacity exponentially.
-| `dequeue` | **O(1)** slice header moves, old entry set to `nil` for GC.
-| `clear`   | **O(n)** nils everything so GC can reclaim.
+**`POST /enqueue`** Push a message in the request body. Returns `202` on success, `413` if the body is over 128 KB or `429` if the queue is full.
 
-Mutex ensures **linearizability** (each op appears instantaneous). Because we hold the lock only long enough to modify the slice, throughput scales linearly until contention on `enqueue`/`dequeue` dominates.
+**`GET /dequeue`** Pop the next message off the front. Returns `200` with the raw bytes or `204` when the queue is empty.
 
----
+**`POST /clear`** Empty the queue immediately. All data is discarded.
 
-## 2. Endpoint Walk‑Through & CS Background
+**`POST /persist?file=name`** Write a JSON snapshot of the current queue to a file inside the data directory. Returns `403` if the path tries to escape the data directory.
 
-| Path / Verb | Semantics | Response | Internals & Rationale |
-|-------------|-----------|----------|----------------------|
-| **`POST /enqueue`** | Push a message (≤ 128 KB). | `202 Accepted` or `429 Queue Full` or `413 Payload Too Large`. | *Reads the body into a byte‑slice*. Calls `enqueue`. Checks both **count‑cap** (`maxMsgs`) and **byte‑cap** (`maxBytes`) in **O(1)**. On success increments `enqueueCnt` atomically. |
-| **`GET /dequeue`** | Pop next message. | `200` with raw bytes or `204 No Content` if empty. | `dequeue` grabs mutex, returns first item, shifts slice head. Failure path increments `dequeueMiss` without lock. |
-| **`POST /clear`** | Purge all data. | `200 OK`. | Nils every slice entry so Go’s tri‑colour GC can reclaim memory quickly; resets counters. |
-| **`POST /persist?file=path.json`** | Snapshot queue to disk (blocking). | `200` or `500`. | **Snapshot copy** removes lock early to minimise stall, then JSON‑encodes for human‑readability. O(n) IO. |
-| **`POST /load?file=path.json`** | Replace in‑memory queue with file contents. | `200` or `500`. | Validates file, recomputes `bytes` in one pass. |
-| **`GET /metrics`** | Human‑friendly JSON telemetry. | `{…}` | Shows uptime, counters, queue size, Go goroutines, and FD usage (reads `/proc/self/fd`). Ideal for dashboards or Prometheus “textfile” collector. |
-| **`GET /health`** | Liveness probe. | `ok` | Constant‑time, lock‑free. |
+**`POST /load?file=name`** Load a previously persisted snapshot from the data directory. Replaces the entire in memory queue. Same path restrictions apply.
 
-### Why JSON not Protobuf?
-* Zero client codegen, trivial `curl` debugging, small payload (few hundred bytes).
+**`GET /metrics`** Returns JSON with uptime, enqueue and dequeue counters, queue length, bytes used, open file descriptors, goroutine count and the server version. Good for dashboards.
 
----
+**`GET /health`** Always returns `ok`. Use this as a liveness probe.
 
-## 3. Compile & Run
+**`GET /version`** Returns the version string injected at build time.
 
-### Prerequisites
-* Go ≥ 1.22
-* (Linux) raise FD limit for heavy load tests: `ulimit -n 65535`
+## Configuring the Server
 
-### Quick start (HTTP)
+You can set everything with flags or environment variables. Flags take priority.
+
+| Flag | Env | Default | What it does |
+|------|-----|---------|--------------|
+| `--addr` | | `:8080` | Listen address |
+| `--max-bytes` | `QUEUE_MAX_BYTES` | `256M` | Memory cap. Supports `M` and `G` suffixes |
+| `--max-msgs` | `QUEUE_MAX_MSGS` | `50000` | Maximum number of messages |
+| `--data-dir` | | `.` | Directory for persist and load operations |
+| `--tls-cert` | | | Path to TLS certificate for HTTPS |
+| `--tls-key` | | | Path to TLS key for HTTPS |
+
+The server also respects `GOMEMLIMIT`. If you do not set it ZapQ prints a suggestion on startup.
+
+## Running
+
+You need Go 1.22 or later. On Linux raise your file descriptor limit for heavy loads:
+
 ```bash
-# Build & run with 2 GiB RAM cap and 100 k messages cap
-QUEUE_MAX_BYTES=2G go run fifo_queue_server.go \
-   --addr :8080 --max-msgs 100000
+ulimit -n 65535
 ```
 
-### Enable HTTPS
+Start with HTTP:
+
+```bash
+go run fifo_queue_server.go --addr :8080 --max-bytes 2G --max-msgs 100000
+```
+
+With TLS:
+
 ```bash
 openssl req -x509 -newkey rsa:2048 -days 365 -nodes \
-        -keyout key.pem -out cert.pem -subj "/CN=localhost"
+    -keyout key.pem -out cert.pem -subj "/CN=localhost"
 
-go run fifo_queue_server.go --addr :8443 \
-        --tls-cert cert.pem --tls-key key.pem
+go run fifo_queue_server.go --addr :8443 --tls-cert cert.pem --tls-key key.pem
 ```
-Now `curl -k https://localhost:8443/health` ➜ `ok`.
 
-### Flags & Env
-| Flag / Env          | Default    | Description |
-|---------------------|-----------|-------------|
-| `--addr`            | `:8080`   | Where to listen (`host:port`). |
-| `--tls-cert/key`    | *empty*   | Enable TLS. |
-| `--max-bytes` / `QUEUE_MAX_BYTES` | `256M` | Memory cap (bytes, M, G). |
-| `--max-msgs` / `QUEUE_MAX_MSGS`   | `50000` | Count cap. |
-
-*Flags beat env vars.*
-
----
-
-## 4. Graceful Shutdown Explained
-
-The server goroutine listens for **`SIGINT`/`SIGTERM`**:
-```go
-sigCh := make(chan os.Signal,1)
-signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-<-sigCh // blocking
-```
-Then runs `srv.Shutdown(ctx)` which:
-1. Stops `Listen` accepting new sockets.  
-2. Waits for in‑flight handlers to return (10 s timeout).  
-3. Active goroutines finish `enqueue/ dequeue`, so no message corruption.
-
-This follows Go’s **graceful‑shutdown contract**, ensuring linearizability even during redeploys.
-
----
-
-## 5. Load‑Testing Examples
+With Docker:
 
 ```bash
-# 100 parallel enqueues, 50k messages total
-hey -m POST -d @<(head -c 16 /dev/urandom | base64) \
-    -c 100 -n 50000 http://localhost:8080/enqueue
-
-# In another shell
-watch -n1 'curl -s http://localhost:8080/metrics | jq "{len:.queue_length, bytes:.queue_bytes}"'
+docker build --build-arg VERSION=latest -t zapq .
+docker run --rm -p 8080:8080 zapq
 ```
-Observe `queue_length` grow, then drain as consumers dequeue.
 
----
+Or use the Makefile:
 
-## 6. Production Checklist (Why It Matters)
+```bash
+make build    # build the binary
+make test     # run tests with race detector
+make docker-build VERSION=v1.2.0
+```
 
-| Item | Reason |
-|------|--------|
-| **`ulimit -n` ≥ 10 k** | Prevent `EMFILE` under heavy concurrency; FD count exposed via `/metrics`. |
-| **Caps tuned** | Protect node‑RAM; shrink caps in staging. |
-| **Process supervisor** | Auto‑restart on crash; passes SIGTERM for graceful shutdown. |
-| **TLS or upstream termination** | Protect messages on the wire (privacy, integrity). |
-| **Alerting** (`queue_length`, `uptime_sec`) | Spot backlog or unexpected restarts. |
-| **Regular `/persist` cron** (optional) | Hot‑backup if message loss is costly. |
-| **Client retry w/ jitter** | Avoid thundering herd when server returns 429. |
+## How It Works
 
----
+The queue is a fixed size ring buffer of byte slices. A read write mutex protects structural changes so multiple readers can check length and size concurrently while only writers block each other. Atomic counters sit outside the lock entirely.
 
-## 7. Extending the Server (Ideas)
+When you enqueue the server copies your payload and places it at the tail position. When you dequeue it reads from the head position, clears that slot for the garbage collector and advances. Both operations touch exactly two integers (head or tail and count) plus one slice slot. No shifting. No growing. No hidden work that gets slower over time.
 
-* Replace global mutex with **segment locks** or a **lock‑free ring buffer** for higher parallelism.
-* Add **priority queues** using a heap instead of FIFO slice.
-* Swap JSON snapshot with **binary protobuf** for faster I/O.
-* Integrate with **systemd‑sdnotify** for readiness signals.
+The persist endpoint takes a consistent snapshot under the write lock then does the JSON encoding and file I/O outside the lock so the queue keeps serving traffic during the write.
 
-Pull requests welcome! 🎉
+Shutdown is graceful. The server stops accepting new connections, drains in flight handlers with a 10 second timeout and then exits cleanly.
 
----
+## Production Tips
+
+Set `GOMEMLIMIT` to about double your max bytes so the Go garbage collector behaves predictably. Tune the message and byte caps based on your available RAM. Use a process supervisor like systemd to restart on crash it will pass SIGTERM and the server will shut down gracefully. Alert on `queue_length` if it keeps growing you have a consumer problem. Run a periodic persist cron if message loss matters to you. Have your clients retry with jitter when they see a 429.
 
 ## License
 
-MIT – Hack, learn, enjoy.
+MIT
