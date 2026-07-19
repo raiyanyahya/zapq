@@ -2,7 +2,7 @@
 
 # ⚡ ZapQ
 
-**Fast in-memory FIFO message queues over plain HTTP. One static binary. Zero dependencies.**
+**Microsecond message queues over HTTP and raw TCP — one static binary, zero dependencies, nothing to operate.**
 
 [![Build](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/raiyanyahya/zapq/actions/workflows/release.yml)
 [![CodeQL](https://github.com/raiyanyahya/zapq/actions/workflows/codeql.yml/badge.svg?branch=master)](https://github.com/raiyanyahya/zapq/actions/workflows/codeql.yml)
