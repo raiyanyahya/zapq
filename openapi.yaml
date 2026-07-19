@@ -8,7 +8,7 @@ info:
 
     Every unprefixed endpoint (e.g. `POST /enqueue`) operates on the queue
     named `default` and is equivalent to its `/q/default/...` form.
-  version: "2.0"
+  version: "1.1"
   license:
     name: MIT
 servers:
@@ -210,24 +210,24 @@ paths:
         - { $ref: '#/components/parameters/wait' }
         - { $ref: '#/components/parameters/lease' }
       responses:
-        "200": { description: See /q/{queue}/dequeue. }
+        "200": { description: "See /q/{queue}/dequeue." }
         "204": { description: Queue empty. }
   /enqueue/batch:
     post:
       summary: Batch-enqueue to the default queue
       responses:
-        "202": { description: See /q/{queue}/enqueue/batch. }
+        "202": { description: "See /q/{queue}/enqueue/batch." }
   /dequeue/batch:
     get:
       summary: Batch-dequeue from the default queue
       responses:
-        "200": { description: See /q/{queue}/dequeue/batch. }
+        "200": { description: "See /q/{queue}/dequeue/batch." }
         "204": { description: Queue empty. }
   /ack:
     post:
       summary: Ack a lease on the default queue
       responses:
-        "200": { description: See /q/{queue}/ack. }
+        "200": { description: "See /q/{queue}/ack." }
   /clear:
     post:
       summary: Clear the default queue

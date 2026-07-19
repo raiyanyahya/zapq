@@ -37,6 +37,8 @@ jobs:
           fi
       - name: Vet
         run: go vet ./...
+      - name: Validate openapi.yaml parses
+        run: python3 -c "import yaml; yaml.safe_load(open('openapi.yaml'))"
       - name: Staticcheck
         if: matrix.go == 'stable'
         run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...

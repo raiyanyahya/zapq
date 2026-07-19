@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.1.0] - 2026-07-19
+
+Everything in this release is backward compatible with 1.0.0: the unprefixed endpoints, flags, env vars, metrics fields and old JSON snapshots all keep working.
+
 ### Added
 - **Binary TCP protocol (ZQP1)** via `--tcp-addr` — a pipelined, length-prefixed wire format sharing the same queues, token scopes and limits as HTTP ([spec](docs/PROTOCOL.md)). Benchmarked at 13µs p50 round trips (vs 46µs HTTP) and 2M+ individual msg/s on a single pipelined connection (vs 183k over HTTP with 200 connections). Supports auth, enqueue, dequeue with `wait`/`lease`, ack and ping; TLS when the server has `--tls-cert`; `zapq_tcp_connections` gauge. The Go client gains `client.DialTCP` with `TCPAuth`/`TCPTLS`/`TCPTimeout` options.
 - **At-least-once delivery**: `GET /dequeue?lease=30s` holds the message on a lease (`X-Lease-Id` header); `POST /ack?id=...` settles it. Unacked leases are requeued at the front when they expire (reaper runs every second, `--max-lease` caps duration, `zapq_lease_expirations_total` counts redeliveries). Leased messages keep counting against capacity so a full queue can never strand a retry.
@@ -17,8 +23,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - **OpenAPI 3.0 spec** (`openapi.yaml`) covering the full API.
 - **Supply chain**: CodeQL and OpenSSF Scorecard workflows, Dependabot, cosign-signed release checksums and container images (keyless), SPDX SBOM on releases, native Go fuzz targets (parseSize, snapshot loader, frame codec) running in CI.
 - **Container hardening**: image is now `FROM scratch` (no OS packages); `zapq --healthcheck` self-probe replaces wget for HEALTHCHECK.
-
-### Earlier unreleased changes
 - Long-poll dequeue: `GET /dequeue?wait=5s` holds the request until a message arrives (capped at 20s), so consumers no longer busy-poll.
 - Optional bearer-token authentication (`--api-token` / `ZAPQ_API_TOKEN`) on all endpoints except `/health` and `/version`; constant-time comparison.
 - Prometheus text exposition on `/metrics` via content negotiation (`Accept: text/plain` or `?format=prometheus`); JSON remains the default.
@@ -45,3 +49,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - Routing uses Go 1.22 method patterns; wrong-method requests get `405` with an `Allow` header.
 - HTTP server sets `ReadHeaderTimeout` and `MaxHeaderBytes`.
 - `parseSize` accepts a `K` suffix and rejects negative sizes.
+
+[Unreleased]: https://github.com/raiyanyahya/zapq/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/raiyanyahya/zapq/compare/v1.0.0...v1.1.0
