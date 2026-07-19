@@ -1,0 +1,42 @@
+# Install: copy the zapq binary to /usr/local/bin, then
+#   sudo cp zapq.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now zapq
+#
+# Put secrets in /etc/zapq/env (mode 0600), e.g.:
+#   ZAPQ_API_TOKEN=change-me
+
+[Unit]
+Description=ZapQ in-memory FIFO queue server
+Documentation=https://github.com/raiyanyahya/zapq
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/zapq \
+    --addr :8080 \
+    --data-dir /var/lib/zapq \
+    --snapshot-file zapq.snap \
+    --snapshot-interval 30s
+EnvironmentFile=-/etc/zapq/env
+Environment=GOMEMLIMIT=512MiB
+
+# The queue lives in RAM; restart fast and restore from the snapshot.
+Restart=on-failure
+RestartSec=1
+TimeoutStopSec=15
+
+# Sandboxing
+DynamicUser=yes
+StateDirectory=zapq
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

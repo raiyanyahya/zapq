@@ -1,47 +1,40 @@
-Install Go and Git:
+ZapQ installation
+=================
 
-  sudo apt update
-  
-  sudo apt install -y golang git
+Option 1: release binary (recommended)
 
-Clone the repository:
+  Download the archive for your platform from
+  https://github.com/raiyanyahya/zapq/releases, then:
 
-  git clone https://github.com/raiyanyahya/zapq.git
-  
-  cd zapq
+    tar xzf zapq-linux-amd64.tar.gz
+    sudo mv zapq-linux-amd64 /usr/local/bin/zapq
+    zapq --addr :8080
 
-Build the binary:
+Option 2: Docker
 
-  go build -o zapq fifo_queue_server.go
+    docker run --rm -p 8080:8080 ghcr.io/raiyanyahya/zapq:latest
 
-Run the server:
+Option 3: build from source (needs Go 1.22+)
 
-  Foreground: ./zapq 
-  
-  Background: ./zapq &
+    git clone https://github.com/raiyanyahya/zapq.git
+    cd zapq
+    make build          # or: go build -o zapq .
+    ./zapq
 
-  Persistent (after logout): 
-  
-    nohup ./zapq > zapq.log 2>&1 &
+Run it as a service
 
-Check if it's running:
+  Use the hardened systemd unit in deploy/systemd/zapq.service:
 
-  ps aux | grep zapq
+    sudo cp zapq /usr/local/bin/
+    sudo cp deploy/systemd/zapq.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now zapq
+    journalctl -u zapq -f
 
-Stop the server:
+Verify
 
-  Find PID from ps aux | grep zapq
-  
-  Then kill <PID>
+    curl localhost:8080/health     # -> ok
+    curl -X POST localhost:8080/enqueue -d hello
+    curl localhost:8080/dequeue    # -> hello
 
-Optional: Move binary to global path:
-
-  sudo mv zapq /usr/local/bin
-
-  Now you can run it anywhere using zapq
-
-Check logs (if using nohup):
-
-  tail -f zapq.log
-
-Done! Server is now running and ready to use.
+See ReadMe.md for configuration (auth token, snapshots, metrics, TLS).

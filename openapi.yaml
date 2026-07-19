@@ -1,0 +1,324 @@
+openapi: 3.0.3
+info:
+  title: ZapQ
+  description: |
+    In-memory FIFO queue server. Payloads are opaque bytes; ordering is FIFO
+    per queue. Delivery is at-most-once by default, or at-least-once when
+    dequeuing with a lease and acking.
+
+    Every unprefixed endpoint (e.g. `POST /enqueue`) operates on the queue
+    named `default` and is equivalent to its `/q/default/...` form.
+  version: "2.0"
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+security:
+  - bearer: []
+  - {}
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: >
+        Optional. When the server is started with any token, requests need a
+        token whose scope covers the endpoint: producer tokens may enqueue,
+        consumer tokens may dequeue/ack, admin/api tokens may do everything.
+        /health and /version never require auth.
+  parameters:
+    queue:
+      name: queue
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,64}$'
+      description: Queue name. Queues are created on first use.
+    wait:
+      name: wait
+      in: query
+      schema: { type: string, example: 5s }
+      description: >
+        Long-poll duration (Go format, e.g. `5s`). The server holds the
+        request until a message arrives or the wait elapses (capped at 20s).
+    lease:
+      name: lease
+      in: query
+      schema: { type: string, example: 30s }
+      description: >
+        Dequeue under a lease instead of removing the message outright. The
+        response carries `X-Lease-Id`; ack it before the lease expires or the
+        message is requeued at the front. Capped by the server's --max-lease.
+  responses:
+    unauthorized:
+      description: Missing or insufficient bearer token.
+  schemas:
+    queueMetrics:
+      type: object
+      properties:
+        length: { type: integer }
+        bytes: { type: integer, format: int64 }
+        leased: { type: integer }
+        head_age_sec: { type: number }
+        enqueues: { type: integer, format: int64 }
+        dequeues_ok: { type: integer, format: int64 }
+        dequeues_empty: { type: integer, format: int64 }
+        acks: { type: integer, format: int64 }
+        lease_expirations: { type: integer, format: int64 }
+paths:
+  /enqueue:
+    post:
+      summary: Enqueue one message (default queue)
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "202": { description: Accepted. }
+        "401": { $ref: '#/components/responses/unauthorized' }
+        "413": { description: Payload over the per-message cap. }
+        "429":
+          description: Queue full; retry with backoff.
+          headers:
+            Retry-After: { schema: { type: string } }
+  /q/{queue}/enqueue:
+    post:
+      summary: Enqueue one message
+      parameters: [ { $ref: '#/components/parameters/queue' } ]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "202": { description: Accepted. }
+        "400": { description: Invalid queue name. }
+        "401": { $ref: '#/components/responses/unauthorized' }
+        "413": { description: Payload over the per-message cap. }
+        "429": { description: Queue full, or queue limit reached. }
+  /q/{queue}/enqueue/batch:
+    post:
+      summary: Enqueue many messages atomically
+      description: >
+        Body is the zapq frame format: for each message, a 4-byte big-endian
+        payload length followed by the payload, repeated. The whole batch is
+        accepted or rejected; nothing is partially enqueued. Limits: 1000
+        messages, 16 MiB total.
+      parameters: [ { $ref: '#/components/parameters/queue' } ]
+      requestBody:
+        required: true
+        content:
+          application/vnd.zapq.frames:
+            schema: { type: string, format: binary }
+      responses:
+        "202":
+          description: All messages accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enqueued: { type: integer }
+        "400": { description: Malformed frames or batch over limits. }
+        "401": { $ref: '#/components/responses/unauthorized' }
+        "413": { description: A frame exceeds the per-message cap. }
+        "429": { description: Batch does not fit; nothing was enqueued. }
+  /q/{queue}/dequeue:
+    get:
+      summary: Dequeue the next message
+      parameters:
+        - { $ref: '#/components/parameters/queue' }
+        - { $ref: '#/components/parameters/wait' }
+        - { $ref: '#/components/parameters/lease' }
+      responses:
+        "200":
+          description: The next message.
+          headers:
+            X-Lease-Id:
+              schema: { type: string }
+              description: Present when dequeued with a lease.
+            X-Lease-Expires:
+              schema: { type: string, format: date-time }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "204": { description: Queue empty (after any wait elapsed). }
+        "400": { description: Invalid wait/lease duration or queue name. }
+        "401": { $ref: '#/components/responses/unauthorized' }
+        "503":
+          description: Too many long-poll consumers parked; retry.
+          headers:
+            Retry-After: { schema: { type: string } }
+  /q/{queue}/dequeue/batch:
+    get:
+      summary: Dequeue up to max messages in one response
+      parameters:
+        - { $ref: '#/components/parameters/queue' }
+        - name: max
+          in: query
+          schema: { type: integer, default: 100, minimum: 1, maximum: 1000 }
+        - { $ref: '#/components/parameters/wait' }
+        - { $ref: '#/components/parameters/lease' }
+      responses:
+        "200":
+          description: Frame-encoded messages, oldest first.
+          headers:
+            X-Lease-Ids:
+              schema: { type: string }
+              description: Comma-separated lease IDs matching frame order.
+          content:
+            application/vnd.zapq.frames:
+              schema: { type: string, format: binary }
+        "204": { description: Queue empty. }
+        "400": { description: Invalid parameters. }
+        "401": { $ref: '#/components/responses/unauthorized' }
+        "503": { description: Too many long-poll consumers parked. }
+  /q/{queue}/ack:
+    post:
+      summary: Acknowledge a leased message
+      parameters:
+        - { $ref: '#/components/parameters/queue' }
+        - name: id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Lease settled; the message is gone for good.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  acked: { type: boolean }
+        "400": { description: Missing id. }
+        "401": { $ref: '#/components/responses/unauthorized' }
+        "404": { description: Lease unknown, already acked, or expired. }
+  /q/{queue}/clear:
+    post:
+      summary: Drop every message and lease in the queue
+      parameters: [ { $ref: '#/components/parameters/queue' } ]
+      responses:
+        "200": { description: Cleared. }
+        "401": { $ref: '#/components/responses/unauthorized' }
+  /dequeue:
+    get:
+      summary: Dequeue from the default queue
+      parameters:
+        - { $ref: '#/components/parameters/wait' }
+        - { $ref: '#/components/parameters/lease' }
+      responses:
+        "200": { description: See /q/{queue}/dequeue. }
+        "204": { description: Queue empty. }
+  /enqueue/batch:
+    post:
+      summary: Batch-enqueue to the default queue
+      responses:
+        "202": { description: See /q/{queue}/enqueue/batch. }
+  /dequeue/batch:
+    get:
+      summary: Batch-dequeue from the default queue
+      responses:
+        "200": { description: See /q/{queue}/dequeue/batch. }
+        "204": { description: Queue empty. }
+  /ack:
+    post:
+      summary: Ack a lease on the default queue
+      responses:
+        "200": { description: See /q/{queue}/ack. }
+  /clear:
+    post:
+      summary: Clear the default queue
+      responses:
+        "200": { description: Cleared. }
+  /queues:
+    get:
+      summary: List queues with length, bytes, leases, and head age
+      responses:
+        "200":
+          description: Queue listing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queues:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        length: { type: integer }
+                        bytes: { type: integer, format: int64 }
+                        leased: { type: integer }
+                        head_age_sec: { type: number }
+        "401": { $ref: '#/components/responses/unauthorized' }
+  /metrics:
+    get:
+      summary: Metrics (JSON by default, Prometheus on request)
+      description: >
+        Returns Prometheus text exposition format when the Accept header
+        contains text/plain or openmetrics (what scrapers send), or with
+        ?format=prometheus. JSON otherwise.
+      responses:
+        "200":
+          description: Metrics snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  queues:
+                    type: object
+                    additionalProperties:
+                      $ref: '#/components/schemas/queueMetrics'
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: '#/components/responses/unauthorized' }
+  /persist:
+    post:
+      summary: Write a snapshot of all queues to the data directory
+      parameters:
+        - name: file
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Snapshot written (binary v2 format with CRC). }
+        "401": { $ref: '#/components/responses/unauthorized' }
+        "403": { description: Path escapes the data directory. }
+  /load:
+    post:
+      summary: Replace all queues from a snapshot in the data directory
+      parameters:
+        - name: file
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Snapshot loaded; previous contents dropped. }
+        "401": { $ref: '#/components/responses/unauthorized' }
+        "403": { description: Path escapes the data directory. }
+        "404": { description: Snapshot file not found. }
+  /health:
+    get:
+      summary: Liveness probe (never requires auth)
+      security: [ {} ]
+      responses:
+        "200": { description: Always `ok`. }
+  /version:
+    get:
+      summary: Build version (never requires auth)
+      security: [ {} ]
+      responses:
+        "200":
+          description: Version string.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }

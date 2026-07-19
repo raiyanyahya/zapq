@@ -1,0 +1,94 @@
+# ZapQ on Kubernetes.
+#
+# ZapQ is a single-node in-memory queue: keep replicas at 1. Running more
+# gives you N independent queues behind one Service, which breaks FIFO
+# ordering across the fleet. The snapshot lives on an emptyDir by default;
+# switch it to a PersistentVolumeClaim if messages must survive pod
+# rescheduling, not just container restarts.
+#
+#   kubectl create secret generic zapq-token --from-literal=token=change-me
+#   kubectl apply -f zapq.yaml
+#
+# For separate producer/consumer/admin credentials, set ZAPQ_PRODUCER_TOKEN,
+# ZAPQ_CONSUMER_TOKEN and ZAPQ_ADMIN_TOKEN instead of the single API token.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zapq
+  labels:
+    app: zapq
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: zapq
+  template:
+    metadata:
+      labels:
+        app: zapq
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: zapq
+          image: ghcr.io/raiyanyahya/zapq:latest
+          args:
+            - --data-dir=/data
+            - --snapshot-file=zapq.snap
+            - --snapshot-interval=30s
+          env:
+            - name: GOMEMLIMIT
+              value: 512MiB
+            - name: QUEUE_MAX_BYTES
+              value: 256M
+            - name: ZAPQ_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: zapq-token
+                  key: token
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 640Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zapq
+  labels:
+    app: zapq
+spec:
+  selector:
+    app: zapq
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
