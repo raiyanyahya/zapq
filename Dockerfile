@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 ARG VERSION=dev
 WORKDIR /src
 COPY go.mod ./
